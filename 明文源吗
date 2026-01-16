@@ -1206,6 +1206,104 @@
         return btoa(links.join('\n'));
     }
 
+    function generateV2RayConfig(links) {
+        return btoa(links.join('\n'));
+    }
+
+    // 生成小火箭格式的订阅（支持 vless、trojan、xhttp 协议，针对ECH进行适配）
+    function generateShadowrocketConfig(links) {
+        const shadowrocketLinks = links.map(link => {
+            try {
+                // 解析 vless:// 或 trojan:// 链接
+                const urlMatch = link.match(/^(vless|trojan):\/\/([^@]+)@([^?#]+)(\?[^#]*)?(#.*)?$/);
+                if (!urlMatch) return link; // 如果无法解析，返回原链接
+                
+                const protocol = urlMatch[1];
+                const user = urlMatch[2];
+                const address = urlMatch[3];
+                const queryString = urlMatch[4] || '';
+                const fragment = urlMatch[5] || '';
+                
+                // 解析地址和端口
+                const addrMatch = address.match(/^\[?([^\]]+)\]?:(\d+)$/);
+                if (!addrMatch) return link;
+                const host = addrMatch[1];
+                const port = addrMatch[2];
+                
+                // 解析查询参数
+                const params = new URLSearchParams(queryString.substring(1));
+                const remarks = fragment.substring(1) ? decodeURIComponent(fragment.substring(1)) : '';
+                
+                // 构建小火箭格式的用户部分（base64编码 auto:user）
+                // 注意：小火箭使用 base64 编码，但不需要移除 = 号，URL 会自动处理
+                const shadowrocketUser = btoa(`auto:${user}`);
+                
+                // 构建小火箭格式的参数
+                const shadowrocketParams = new URLSearchParams();
+                
+                // path 参数
+                const path = params.get('path') || '/?ed=2048';
+                shadowrocketParams.set('path', path);
+                
+                // remarks 参数
+                if (remarks) {
+                    shadowrocketParams.set('remarks', remarks);
+                }
+                
+                // obfsParam 参数（从 host 参数获取）
+                const obfsParam = params.get('host') || host;
+                shadowrocketParams.set('obfsParam', obfsParam);
+                
+                // obfs 参数（根据 type 参数设置）
+                const type = params.get('type');
+                if (type === 'ws') {
+                    shadowrocketParams.set('obfs', 'websocket');
+                } else if (type === 'xhttp') {
+                    shadowrocketParams.set('obfs', 'http');
+                }
+                
+                // tls 参数
+                if (params.get('security') === 'tls') {
+                    shadowrocketParams.set('tls', '1');
+                }
+                
+                // peer 参数（从 sni 参数获取）
+                const peer = params.get('sni') || obfsParam;
+                shadowrocketParams.set('peer', peer);
+                
+                // alpn 参数（如果有，通常启用ECH时会有）
+                const alpn = params.get('alpn');
+                if (alpn) {
+                    shadowrocketParams.set('alpn', alpn);
+                }
+                
+                // fragment 和 mode 参数
+                shadowrocketParams.set('fragment', 'auto');
+                shadowrocketParams.set('mode', 'auto');
+                
+                // ech 参数（只针对ECH，如果有）
+                const ech = params.get('ech');
+                if (ech) {
+                    shadowrocketParams.set('ech', ech);
+                }
+                
+                // 对于 xhttp 协议，需要添加 mode 参数（如果原链接有）
+                const mode = params.get('mode');
+                if (mode) {
+                    shadowrocketParams.set('mode', mode);
+                }
+                
+                // 构建小火箭格式的链接（保持原协议类型）
+                return `${protocol}://${shadowrocketUser}@${host}:${port}?${shadowrocketParams.toString()}`;
+            } catch (error) {
+                // 如果转换失败，返回原链接
+                return link;
+            }
+        });
+        
+        return btoa(shadowrocketLinks.join('\n'));
+    }
+
     // 全局变量存储ECH调试信息
     let echDebugInfo = '';
     
@@ -1360,7 +1458,13 @@
         
         const finalLinks = [];
         const workerDomain = url.hostname;
-        const target = url.searchParams.get('target') || 'base64';
+        
+        // 检测 User-Agent 或 target 参数来确定是否为小火箭
+        const userAgent = request.headers.get('User-Agent') || '';
+        const isShadowrocket = userAgent.toLowerCase().includes('shadowrocket') || 
+                               url.searchParams.get('target')?.toLowerCase() === 'shadowrocket';
+        
+        const target = isShadowrocket ? 'shadowrocket' : (url.searchParams.get('target') || 'base64');
 
         // 获取ECH配置（如果启用）
         let echConfig = null;
@@ -1511,6 +1615,9 @@
                 break;
             case atob('bG9vbg=='):
                 subscriptionContent = generateLoonConfig(finalLinks);
+                break;
+            case 'shadowrocket':
+                subscriptionContent = generateShadowrocketConfig(finalLinks);
                 break;
             default:
                 subscriptionContent = btoa(finalLinks.join('\n'));
@@ -2177,7 +2284,7 @@
                         KR: '🇰🇷 韩国', DE: '🇩🇪 德国', SE: '🇸🇪 瑞典', NL: '🇳🇱 荷兰',
                         FI: '🇫🇮 芬兰', GB: '🇬🇧 英国'
                     },
-                    terminal: '终端 v2.9.1',
+                    terminal: '终端 v2.9.2',
                     githubProject: 'GitHub 项目',
                     autoDetectClient: '自动识别',
                 selectionLogicText: '同地区 → 邻近地区 → 其他地区',
@@ -3024,7 +3131,12 @@
                 var finalUrl = subscriptionUrl;
                 
                 if (clientType === atob('djJyYXk=')) {
-                    finalUrl = subscriptionUrl;
+                    // 如果是 Shadowrocket，自动添加 target=shadowrocket 参数
+                    if (clientName === 'Shadowrocket') {
+                        finalUrl = subscriptionUrl + (subscriptionUrl.includes('?') ? '&' : '?') + 'target=shadowrocket';
+                    } else {
+                        finalUrl = subscriptionUrl;
+                    }
                     var urlElement = document.getElementById("clientSubscriptionUrl");
                     urlElement.textContent = finalUrl;
                     urlElement.style.display = "block";
